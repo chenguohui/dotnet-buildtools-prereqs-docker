@@ -231,7 +231,7 @@ def main():
     parser = argparse.ArgumentParser(
         description="Download loongarch64 RPMs and extract to sysroot"
     )
-    parser.add_argument("--repo", required=True, help="RPM repository base URL")
+    parser.add_argument("--repo", action="append", required=True, help="RPM repository base URL (may be given multiple times; earlier repos take precedence)")
     parser.add_argument("--rootfsdir", required=True, help="Target sysroot directory")
     parser.add_argument("--packages", nargs="+", required=True, help="Package names to install")
     parser.add_argument("--tmpdir", default=None, help="Temporary directory for RPM downloads")
@@ -244,21 +244,33 @@ def main():
     rpm_dir = os.path.join(tmp_dir, "rpms")
     os.makedirs(rpm_dir, exist_ok=True)
 
-    repo_base = args.repo.rstrip("/")
-
-    print(f"Repository: {repo_base}")
+    print(f"Repositories: {', '.join(args.repo)}")
     print(f"Sysroot:    {rootfs_dir}")
     print(f"Requested:  {len(args.packages)} packages")
     print()
 
-    # 1. Load package index
-    print("[1/3] Loading package index...")
-    primary_rel = fetch_repomd(repo_base)
-    if not primary_rel:
-        print("ERROR: could not find primary metadata", file=sys.stderr)
-        sys.exit(1)
+    # 1. Load package indexes from all repos. Earlier repos take precedence,
+    #    later repos only fill in packages missing from earlier ones.
+    print("[1/3] Loading package indexes...")
+    all_packages = {}
+    pkg_repo = {}
+    for repo_base in args.repo:
+        repo_base = repo_base.rstrip("/")
+        print(f"  Repo: {repo_base}")
+        primary_rel = fetch_repomd(repo_base)
+        if not primary_rel:
+            print("ERROR: could not find primary metadata", file=sys.stderr)
+            sys.exit(1)
 
-    all_packages = load_package_index(repo_base, primary_rel)
+        index = load_package_index(repo_base, primary_rel)
+        added = 0
+        for name, entry in index.items():
+            if name not in all_packages:
+                all_packages[name] = entry
+                pkg_repo[name] = repo_base
+                added += 1
+        print(f"  Indexed {len(index)} packages ({added} new)")
+    print()
 
     # 2. Match requested packages
     print()
@@ -267,28 +279,32 @@ def main():
     missing = []
 
     for req in args.packages:
+        if not req.strip():
+            continue  # blank lines from a package-list file must not fuzzy-match everything
         if req in all_packages:
             ver, href = all_packages[req]
-            found.append((req, ver, href))
+            found.append((req, ver, href, pkg_repo[req]))
         else:
             # Fuzzy match
             matches = [n for n in all_packages if n.startswith(req)]
             if len(matches) == 1:
                 ver, href = all_packages[matches[0]]
-                found.append((matches[0], ver, href))
+                found.append((matches[0], ver, href, pkg_repo[matches[0]]))
                 print(f"  {req} -> {matches[0]}-{ver}")
             elif len(matches) > 1:
                 # Pick exact match first, otherwise first
                 exact = [m for m in matches if m == req]
                 pick = exact[0] if exact else matches[0]
                 ver, href = all_packages[pick]
-                found.append((pick, ver, href))
+                found.append((pick, ver, href, pkg_repo[pick]))
                 print(f"  {req} -> {pick}-{ver}")
             else:
                 missing.append(req)
 
     if missing:
-        print(f"\n  WARNING: {len(missing)} not found: {', '.join(missing)}")
+        print(f"\n  ERROR: {len(missing)} requested package(s) not found in any repo: {', '.join(missing)}", file=sys.stderr)
+        print("  Add them to the package list or pass additional --repo arguments.", file=sys.stderr)
+        sys.exit(1)
 
     # 3. Download RPMs
     print()
@@ -310,8 +326,8 @@ def main():
         return False
 
     failed_downloads = []
-    for i, (name, ver, href) in enumerate(found):
-        rpm_url = urljoin(repo_base + "/", href)
+    for i, (name, ver, href, repo) in enumerate(found):
+        rpm_url = urljoin(repo + "/", href)
         rpm_path = os.path.join(rpm_dir, os.path.basename(href))
 
         if os.path.exists(rpm_path):
@@ -335,7 +351,8 @@ def main():
             else:
                 still_failed.append(name)
         if still_failed:
-            print(f"  STILL FAILED: {', '.join(still_failed)}")
+            print(f"  ERROR: {len(still_failed)} packages could not be downloaded: {', '.join(still_failed)}", file=sys.stderr)
+            sys.exit(1)
 
     # 4. Extract RPMs
     print()
@@ -343,7 +360,7 @@ def main():
 
     extracted = 0
     failed = []
-    for name, ver, href in found:
+    for name, ver, href, repo in found:
         rpm_path = os.path.join(rpm_dir, os.path.basename(href))
         if not os.path.exists(rpm_path):
             continue
@@ -354,7 +371,8 @@ def main():
 
     print(f"  Extracted: {extracted}/{len(found)}")
     if failed:
-        print(f"  Failed: {', '.join(failed)}")
+        print(f"  ERROR: {len(failed)} packages could not be extracted: {', '.join(failed)}", file=sys.stderr)
+        sys.exit(1)
 
     # 5. Summary
     print()
@@ -381,8 +399,10 @@ def main():
     print(f"  Done:  {rootfs_dir}")
 
     # Cleanup
+    # Note: do NOT re-import shutil here - the nested _download() function
+    # references the module-level shutil and a local import would shadow it,
+    # breaking all downloads ("cannot access free variable 'shutil'").
     if not args.tmpdir:
-        import shutil
         shutil.rmtree(tmp_dir)
 
 

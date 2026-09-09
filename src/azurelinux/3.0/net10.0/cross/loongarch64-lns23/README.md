@@ -18,11 +18,13 @@ docker build \
     src/azurelinux/3.0/net10.0/cross/loongarch64-lns23/
 ```
 
-- 阶段 1 从 `https://pkg.loongnix.cn/loongnix-server/23/os/loongarch64` 下载
-  `lns23-packages.txt` 列出的 loongarch64 RPM 并解包为 sysroot。
+- 阶段 1 从 `https://pkg.loongnix.cn/loongnix-server/23/os/loongarch64`（os 核心仓库）
+  与 `https://pkg.loongnix.cn/loongnix-server/23/epll/loongarch64`（EPLL 扩展仓库）下载
+  `lns23-packages.txt` 列出的 loongarch64 RPM 并解包为 sysroot（os 仓库优先）。
 - 若构建环境无法访问 pkg.loongnix.cn，可用
-  `--build-arg LNS_REPO_BASE=<镜像地址>` 覆盖。
-- 注意：`install-rpms.py` 不做依赖解析，包列表需要与原生构建环境保持同步。
+  `--build-arg LNS_REPO_BASE=<镜像地址> --build-arg LNS_REPO_EPLL=<镜像地址>` 覆盖。
+- 注意：`install-rpms.py` 不做依赖解析，包列表需要与原生构建环境保持同步
+  （含 libcurl/krb5/lttng-ust 等运行时依赖链，均已在包列表中显式列出）。
 
 ### 方式 2：使用 qemu 导出的 sysroot（推荐，yum 解析依赖 + %post 已执行，最忠实）
 
@@ -110,3 +112,8 @@ docker run --platform linux/loong64 --rm -v <artifacts-dir>:/out \
 - dotnet 构建系统硬编码 `loongarch64-linux-gnu` triple，而 lns23 的实际 triple 是
   `loongarch64-loongnix-linux`；Dockerfile 阶段 1 已通过符号链接完成兼容。
 - glibc 实际版本以构建日志/verify 输出为准（23 系列流式仓库可能更新）。
+- 已知限制：clang 20.1.8 的 LoongArch 后端在编译 lttng-ust 的 `tracef.h` 便捷宏
+  （STAP 探针风格内联汇编，参数为变量/字符串时）存在上游崩溃
+  （`LoongArchDAGToDAGISel::SelectBaseAddr`）。.NET 运行时实际使用的是
+  `tracepoint.h` API（coreclr eventtrace.cpp），已实测可正常编译（-O0/-O2 均通过），
+  不受影响。若你的代码确实需要 `tracef`，请绕开该宏或等待上游修复。

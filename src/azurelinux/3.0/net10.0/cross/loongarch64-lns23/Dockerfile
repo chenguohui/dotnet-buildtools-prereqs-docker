@@ -30,14 +30,16 @@ FROM mcr.microsoft.com/azurelinux/base/core:3.0 AS sysroot-builder
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 ARG ROOTFS_DIR
-# Override if pkg.loongnix.cn is unreachable from the build environment
+# Override if pkg.loongnix.cn is unreachable from the build environment.
+# os = core repo, epll = EPLL extra-packages repo (lttng-ust/libomp/... live there)
 ARG LNS_REPO_BASE=https://pkg.loongnix.cn/loongnix-server/23/os/loongarch64
+ARG LNS_REPO_EPLL=https://pkg.loongnix.cn/loongnix-server/23/epll/loongarch64
 
 # python3 (RPM metadata parsing/download), libarchive's bsdtar (single-step RPM
 # extraction with native zstd/xz support), p7zip/zstd/cpio (install-rpms.py
 # fallback path; azurelinux's p7zip only ships 7za, provide a 7z alias)
 RUN tdnf update -y && \
-    tdnf install -y python3 libarchive p7zip zstd cpio tar ca-certificates && \
+    tdnf install -y python3 libarchive p7zip zstd cpio tar ca-certificates coreutils && \
     ln -s /usr/bin/7za /usr/local/bin/7z
 
 WORKDIR /build
@@ -50,16 +52,25 @@ RUN set -euo pipefail && \
         echo "==> Using prebuilt sysroot tarball (exported from lns23)" && \
         tar -xzf /build/sysroot/lns23-sysroot.tar.gz -C "$ROOTFS_DIR" && \
         echo "==> Fixing absolute symlinks" && \
-        python3 scripts/fix-sysroot-symlinks.py "$ROOTFS_DIR"; \
+        python3 -u scripts/fix-sysroot-symlinks.py "$ROOTFS_DIR"; \
     else \
-        echo "==> Building sysroot from $LNS_REPO_BASE" && \
-        python3 scripts/install-rpms.py \
+        echo "==> Building sysroot from $LNS_REPO_BASE + $LNS_REPO_EPLL" && \
+        python3 -u scripts/install-rpms.py \
             --repo "$LNS_REPO_BASE" \
+            --repo "$LNS_REPO_EPLL" \
             --rootfsdir "$ROOTFS_DIR" \
-            --packages $(grep -v '^#' scripts/lns23-packages.txt) && \
+            --packages $(grep -vE '^\s*(#|$)' scripts/lns23-packages.txt) && \
         echo "==> Fixing absolute symlinks" && \
-        python3 scripts/fix-sysroot-symlinks.py "$ROOTFS_DIR"; \
+        python3 -u scripts/fix-sysroot-symlinks.py "$ROOTFS_DIR"; \
     fi && \
+    echo "==> usr-merge layout symlinks (normally provided by the filesystem RPM, whose payload our extractor cannot parse)" && \
+    for entry in "bin:usr/bin" "sbin:usr/sbin" "lib:usr/lib" "lib64:usr/lib64"; do \
+        link="${entry%%:*}"; \
+        if [[ ! -e "$ROOTFS_DIR/$link" && ! -L "$ROOTFS_DIR/$link" ]]; then \
+            ln -s "${entry#*:}" "$ROOTFS_DIR/$link" && \
+            echo "  /$link -> ${entry#*:}"; \
+        fi; \
+    done && \
     echo "==> GCC triple compatibility (dotnet build system hardcodes loongarch64-linux-gnu)" && \
     ACTUAL_TRIPLE=$(ls "$ROOTFS_DIR/usr/lib/gcc/" | head -1) && \
     DEBIAN_TRIPLE=loongarch64-linux-gnu && \
@@ -73,11 +84,13 @@ RUN set -euo pipefail && \
             echo "  $ROOTFS_DIR/usr/include/c++/$CXX_VER/$DEBIAN_TRIPLE -> $ACTUAL_TRIPLE"; \
         fi; \
         for subdir in lib usr/lib; do \
-            target="$ROOTFS_DIR/$subdir/$DEBIAN_TRIPLE"; \
-            if [[ ! -e "$target" ]]; then \
-                mkdir -p "$(dirname "$target")" && \
-                ln -s "../lib64" "$target" && \
-                echo "  $target -> ../lib64"; \
+            parent="$ROOTFS_DIR/$subdir"; \
+            phys_parent=$(realpath -m "$parent"); \
+            if [[ ! -e "$phys_parent/$DEBIAN_TRIPLE" && ! -L "$phys_parent/$DEBIAN_TRIPLE" ]]; then \
+                mkdir -p "$phys_parent" && \
+                rel=$(realpath -m --relative-to="$phys_parent" "$ROOTFS_DIR/usr/lib64") && \
+                ln -s "$rel" "$phys_parent/$DEBIAN_TRIPLE" && \
+                echo "  $phys_parent/$DEBIAN_TRIPLE -> $rel"; \
             fi; \
         done; \
     else \
@@ -140,7 +153,7 @@ COPY --from=runtimes-builder $ROOTFS_DIR $ROOTFS_DIR
 COPY verify-sysroot.sh /usr/local/bin/verify-sysroot.sh
 RUN tdnf install -y findutils && \
     chmod +x /usr/local/bin/verify-sysroot.sh && \
-    bash /usr/local/bin/verify-sysroot.sh
+    GLIBC_EXPECTED=2.38 bash /usr/local/bin/verify-sysroot.sh
 
 ENV ROOTFS_DIR=$ROOTFS_DIR \
     GLIBC_EXPECTED=2.38 \

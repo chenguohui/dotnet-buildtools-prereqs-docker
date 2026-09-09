@@ -71,3 +71,33 @@ elfutils-libs
 
 # --- readline ---
 readline-devel
+
+# --- Transitive runtime libraries ---
+# install-rpms.py has no dependency resolution, so the NEEDED chains of the
+# -devel packages must be listed explicitly (names verified against the lns23
+# os repo: note keyutils/lz4, not keyutils-libs/lz4-libs as on other distros).
+zlib
+bzip2-libs
+xz-libs
+libxml2
+readline
+libxcrypt
+# krb5 chain
+libverto
+keyutils
+libcom_err
+libselinux
+libsepol
+# libcurl chain
+libpsl
+libidn2
+libnghttp2
+libssh
+lz4
+pcre2
+openldap
+libzstd
+# lttng-ust chain
+userspace-rcu
+userspace-rcu-devel
+systemtap-sdt-devel

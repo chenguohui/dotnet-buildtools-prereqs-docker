@@ -10,6 +10,9 @@ set -euo pipefail
 # =============================================================================
 
 ROOTFS_DIR="${ROOTFS_DIR:-/crossrootfs/loongarch64}"
+# Highest GLIBC_2.x symbol version the target lns23 system (glibc 2.38) provides.
+# Safe under `set -u`; can be overridden from the environment.
+GLIBC_EXPECTED="${GLIBC_EXPECTED:-2.38}"
 
 echo "=== Sysroot 验证 ==="
 echo ""
@@ -111,8 +114,11 @@ if clang --target="$DETECTED_TRIPLE" --sysroot="${ROOTFS_DIR}" -fuse-ld=lld \
     echo "  --- 产物 glibc floor（引用符号的最高 GLIBC_2.x 版本）---"
     FLOOR=$(readelf -V /tmp/test 2>/dev/null | grep -o 'GLIBC_2\.[0-9]*' | sort -Vu | tail -1)
     echo "  floor: ${FLOOR:-未知}（目标系统 glibc 必须 ≥ 此版本）"
-    if [[ -n "$GLIBC_EXPECTED" && -n "$FLOOR" && "$FLOOR" > "$GLIBC_EXPECTED" ]]; then
+    FLOOR_VER="${FLOOR#GLIBC_}"
+    if [[ -n "$GLIBC_EXPECTED" && -n "$FLOOR_VER" && "$FLOOR_VER" > "$GLIBC_EXPECTED" ]]; then
         echo "  ❌ floor 高于期望的 $GLIBC_EXPECTED"
+    elif [[ -n "$FLOOR_VER" ]]; then
+        echo "  ✅ floor ≤ 目标 glibc $GLIBC_EXPECTED，产物可在 lns23 上运行"
     fi
 else
     echo "  ❌ 编译失败"
