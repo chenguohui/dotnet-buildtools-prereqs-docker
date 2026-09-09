@@ -1,0 +1,109 @@
+# Loongnix Server 8.4 sysroot package list (loongarch64).
+# install-rpms.py does not resolve dependencies, so all required packages must
+# be listed here. Keep in sync with the native build environment.
+# All names verified against pkg.loongnix.cn/loongnix-server/8.4
+# BaseOS/AppStream/loongarch64/release (RHEL8-style repos).
+
+# --- Core system libraries ---
+glibc
+glibc-common
+glibc-devel
+# RHEL8-style split: the plain C headers (stdio.h/assert.h/...) live in
+# glibc-headers; glibc-devel only ships bits/sys/gnu and the .so/.a files.
+glibc-headers
+glibc-static
+kernel-headers
+
+# --- Build toolchain (target side) ---
+binutils
+binutils-devel
+gcc
+gcc-c++
+libgcc
+libstdc++
+libstdc++-devel
+libstdc++-static
+make
+cmake
+pkgconf
+pkgconf-pkg-config
+
+# --- Compression ---
+zlib-devel
+zlib-static
+bzip2-devel
+xz-devel
+
+# --- Crypto / SSL ---
+openssl-devel
+openssl-libs
+
+# --- Kerberos ---
+krb5-devel
+krb5-libs
+libcom_err-devel
+
+# --- HTTP / networking ---
+libcurl-devel
+libcurl
+brotli
+libxml2-devel
+
+# --- ICU (internationalization) ---
+libicu
+libicu-devel
+
+# --- LTTng (runtime event tracing) ---
+lttng-ust
+lttng-ust-devel
+
+# --- ncurses ---
+ncurses
+ncurses-devel
+ncurses-libs
+
+# --- ELF / DWARF ---
+elfutils-devel
+elfutils-libelf-devel
+elfutils-libs
+
+# --- readline ---
+readline-devel
+
+# --- Transitive runtime libraries ---
+# install-rpms.py has no dependency resolution, so the NEEDED chains of the
+# -devel packages must be listed explicitly (names verified against the lns8
+# BaseOS repo: note keyutils/lz4, not keyutils-libs/lz4-libs as on some distros).
+zlib
+bzip2-libs
+xz-libs
+libxml2
+readline
+libxcrypt
+# krb5 chain
+libverto
+keyutils
+libcom_err
+libselinux
+libsepol
+# libcurl chain
+libpsl
+libidn2
+libnghttp2
+libssh
+lz4
+pcre2
+openldap
+libzstd
+# lttng-ust chain
+userspace-rcu
+userspace-rcu-devel
+systemtap-sdt-devel
+libatomic
+
+# Notes on lns23 packages intentionally not listed here:
+#   * libbrotli  -> lns8 names it "brotli" (BaseOS 1.0.6).
+#   * libunwind / libunwind-devel -> not shipped by any lns8 8.4 repo
+#     (BaseOS/AppStream/PowerTools checked; 8.4 has no public EPOL).
+#   * libomp / libomp-devel -> likewise not shipped; OpenMP support on the
+#     lns8 target is unavailable.
