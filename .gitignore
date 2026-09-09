@@ -30,3 +30,9 @@ artifacts/
 
 # eng/common copies staged into Docker build contexts
 src/**/eng/common/
+
+# Reference-only LoongArch experiments (has its own git history)
+custom/
+
+# Optional prebuilt sysroots dropped into image build contexts
+src/**/sysroot/*.tar.gz

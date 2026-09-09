@@ -1,0 +1,73 @@
+# Loongnix Server 23 sysroot package list (loongarch64).
+# install-rpms.py does not resolve dependencies, so all required packages must
+# be listed here. Keep in sync with the native build environment.
+
+# --- Core system libraries ---
+glibc
+glibc-common
+glibc-devel
+glibc-static
+kernel-headers
+
+# --- Build toolchain (target side) ---
+binutils
+binutils-devel
+gcc
+gcc-c++
+libgcc
+libstdc++
+libstdc++-devel
+libstdc++-static
+make
+cmake
+pkgconf
+pkgconf-pkg-config
+
+# --- Compression ---
+zlib-devel
+zlib-static
+bzip2-devel
+xz-devel
+
+# --- Crypto / SSL ---
+openssl-devel
+openssl-libs
+
+# --- Kerberos ---
+krb5-devel
+krb5-libs
+
+# --- HTTP / networking ---
+libcurl-devel
+libcurl
+libbrotli
+libxml2-devel
+
+# --- ICU (internationalization) ---
+libicu
+libicu-devel
+
+# --- LTTng (runtime event tracing) ---
+lttng-ust
+lttng-ust-devel
+
+# --- Unwind (exception handling / stack unwinding) ---
+libunwind
+libunwind-devel
+
+# --- OpenMP ---
+libomp
+libomp-devel
+
+# --- ncurses ---
+ncurses
+ncurses-devel
+ncurses-libs
+
+# --- ELF / DWARF ---
+elfutils-devel
+elfutils-libelf-devel
+elfutils-libs
+
+# --- readline ---
+readline-devel
