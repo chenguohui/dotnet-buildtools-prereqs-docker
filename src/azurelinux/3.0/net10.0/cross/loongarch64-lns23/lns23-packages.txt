@@ -36,6 +36,7 @@ openssl-libs
 # --- Kerberos ---
 krb5-devel
 krb5-libs
+libcom_err-devel
 
 # --- HTTP / networking ---
 libcurl-devel
@@ -101,3 +102,4 @@ libzstd
 userspace-rcu
 userspace-rcu-devel
 systemtap-sdt-devel
+libatomic
