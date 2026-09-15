@@ -15,8 +15,8 @@
 
 | 镜像 | 内容 |
 |---|---|
-| `...-crossdeps-builder-amd64-lns8` | fork LLVM 20.1.8 源码编译至 `/opt/llvm`（构建最久） |
-| `...-crossdeps-llvm-amd64-lns8` | 承载 fork LLVM 工具链 |
+| `...-crossdeps-builder-lns8-amd64` | fork LLVM 20.1.8 源码编译至 `/opt/llvm`（构建最久） |
+| `...-crossdeps-llvm-lns8-amd64` | 承载 fork LLVM 工具链 |
 | `...-cross-loongarch64-lns8` | 最终交叉构建镜像（lns8 sysroot + fork 工具链 + compiler-rt builtins） |
 
 ## 一、构建镜像
@@ -28,8 +28,8 @@
 
 ```bash
 pwsh build.ps1 -Paths \
-    'src/azurelinux/3.0/net10.0/crossdeps-builder/amd64-lns8/Dockerfile' \
-    'src/azurelinux/3.0/net10.0/crossdeps-llvm/amd64-lns8/Dockerfile' \
+    'src/azurelinux/3.0/net10.0/crossdeps-builder/lns8/amd64/Dockerfile' \
+    'src/azurelinux/3.0/net10.0/crossdeps-llvm/lns8/amd64/Dockerfile' \
     'src/azurelinux/3.0/net10.0/cross/loongarch64-lns8/Dockerfile'
 ```
 
@@ -42,17 +42,17 @@ pwsh build.ps1 -Paths \
 ```bash
 # 1. crossdeps-builder（fork LLVM 全量编译，约 30-90 分钟）
 #    该 Dockerfile 有 COPY eng/common/cross/，先把 eng/common 暂存进构建上下文：
-cp -r eng/common src/azurelinux/3.0/net10.0/crossdeps-builder/amd64-lns8/eng
+cp -r eng/common src/azurelinux/3.0/net10.0/crossdeps-builder/lns8/amd64/eng
 docker build \
-    -f src/azurelinux/3.0/net10.0/crossdeps-builder/amd64-lns8/Dockerfile \
-    -t mcr.microsoft.com/dotnet-buildtools/prereqs:azurelinux-3.0-net10.0-crossdeps-builder-amd64-lns8 \
-    src/azurelinux/3.0/net10.0/crossdeps-builder/amd64-lns8/
+    -f src/azurelinux/3.0/net10.0/crossdeps-builder/lns8/amd64/Dockerfile \
+    -t mcr.microsoft.com/dotnet-buildtools/prereqs:azurelinux-3.0-net10.0-crossdeps-builder-lns8-amd64 \
+    src/azurelinux/3.0/net10.0/crossdeps-builder/lns8/amd64/
 
 # 2. crossdeps-llvm（FROM 上一步本地构建的 builder 镜像，全名 tag 匹配）
 docker build \
-    -f src/azurelinux/3.0/net10.0/crossdeps-llvm/amd64-lns8/Dockerfile \
-    -t mcr.microsoft.com/dotnet-buildtools/prereqs:azurelinux-3.0-net10.0-crossdeps-llvm-amd64-lns8 \
-    src/azurelinux/3.0/net10.0/crossdeps-llvm/amd64-lns8/
+    -f src/azurelinux/3.0/net10.0/crossdeps-llvm/lns8/amd64/Dockerfile \
+    -t mcr.microsoft.com/dotnet-buildtools/prereqs:azurelinux-3.0-net10.0-crossdeps-llvm-lns8-amd64 \
+    src/azurelinux/3.0/net10.0/crossdeps-llvm/lns8/amd64/
 
 # 3. cross（sysroot 构建 + runtimes 交叉编译 + 自检）
 docker build \
@@ -187,8 +187,8 @@ docker run --rm \
 
 | 路径 | 说明 |
 |---|---|
-| `crossdeps-builder/amd64-lns8/Dockerfile` | fork LLVM 20.1.8 源码编译（sha256 固定校验，无 GPG 签名可用） |
-| `crossdeps-llvm/amd64-lns8/Dockerfile` | 把 `/opt/llvm` 承载为 `/usr/local` |
+| `crossdeps-builder/lns8/amd64/Dockerfile` | fork LLVM 20.1.8 源码编译（sha256 固定校验，无 GPG 签名可用） |
+| `crossdeps-llvm/lns8/amd64/Dockerfile` | 把 `/opt/llvm` 承载为 `/usr/local` |
 | `cross/loongarch64-lns8/Dockerfile` | 三阶段：sysroot 构建 → LLVM runtimes 交叉编译 → 最终镜像 |
 | `cross/loongarch64-lns8/install-rpms.py` | 解析 yum repomd、下载 loongarch64 RPM 并解包（纯 Python + bsdtar） |
 | `cross/loongarch64-lns8/fix-sysroot-symlinks.py` | 将 RPM 包内的绝对符号链接改写为 sysroot 内的相对链接 |

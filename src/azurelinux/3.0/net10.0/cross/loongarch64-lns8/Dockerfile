@@ -7,7 +7,7 @@
 # Same design as cross/loongarch64-lns23, but the sysroot is built from the
 # Loongnix Server 8.4 RPM repositories. lns8 is an old-world ABI system, so:
 #   * the host toolchain must be the Loongson LLVM 20.1.8 fork (built in
-#     crossdeps-builder-amd64-lns8; upstream LLVM 20.1.8 is new-world only), and
+#     crossdeps-builder-lns8-amd64; upstream LLVM 20.1.8 is new-world only), and
 #   * target code is built with -mcmodel=large per the Loongson build docs.
 # Binaries produced with this image only require GLIBC symbols <= 2.28 and
 # therefore run on lns8 and other old-world LoongArch distros.
@@ -101,7 +101,7 @@ RUN set -euo pipefail && \
     fi
 
 # ── Stage 2: cross-build compiler-rt builtins + static libc++ against the sysroot ──
-FROM mcr.microsoft.com/dotnet-buildtools/prereqs:azurelinux-3.0-net10.0-crossdeps-builder-amd64-lns8 AS runtimes-builder
+FROM mcr.microsoft.com/dotnet-buildtools/prereqs:azurelinux-3.0-net10.0-crossdeps-builder-lns8-amd64 AS runtimes-builder
 
 ARG ROOTFS_DIR
 
@@ -151,7 +151,7 @@ RUN TARGET_TRIPLE="loongarch64-linux-gnu" && \
     cmake --install runtimes --prefix "$ROOTFS_DIR/usr"
 
 # ── Stage 3: final image (lns8 crossdeps-llvm + lns8 sysroot + builtins) ────
-FROM mcr.microsoft.com/dotnet-buildtools/prereqs:azurelinux-3.0-net10.0-crossdeps-llvm-amd64-lns8
+FROM mcr.microsoft.com/dotnet-buildtools/prereqs:azurelinux-3.0-net10.0-crossdeps-llvm-lns8-amd64
 
 ARG ROOTFS_DIR
 
