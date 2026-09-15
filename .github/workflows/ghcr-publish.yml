@@ -1,0 +1,91 @@
+name: Publish LoongArch images to GHCR
+
+# Publishes the loongarch64 cross images (and their crossdeps parents) to
+# ghcr.io/chenguohui/dotnet-buildtools-prereqs-docker, using the upstream tag
+# strings unchanged. Mirrors the Azure DevOps pipeline's ImageBuilder flow.
+#
+# Note: GitHub Actions only runs workflows found in the branch being pushed,
+# so this file must also be present on the content branches
+# (feature/net10-cross-loongarch64-lns8 / -lns23) for their push events to
+# trigger a publish. workflow_dispatch on this branch always works.
+
+on:
+  push:
+    branches:
+      - feature/net10-cross-loongarch64-lns8
+      - feature/net10-cross-loongarch64-lns23
+      - feature/ci-ghcr-publish
+    paths:
+      - 'src/**'
+      - 'eng/**'
+      - 'manifest.json'
+      - '.github/workflows/ghcr-publish.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  # Registry + repo for both the tags we push and the FROM override.
+  TARGET_REPO: ghcr.io/chenguohui/dotnet-buildtools-prereqs-docker
+
+jobs:
+  publish-cross-images:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # The stock Invoke-ImageBuilder.ps1 runs the ImageBuilder container with
+      # only the docker socket mounted, so the push credentials written by
+      # login-action never reach it. Run the container manually and mount the
+      # docker config so `docker push` inside the container is authenticated.
+      #
+      # ImageBuilder sorts images by dependency and pushes parents before
+      # building children, which matters because --base-override-sub rewrites
+      # the children's FROM lines to point at this GHCR repo.
+      #
+      # Paths: crossdeps-builder/amd64 + crossdeps-llvm/amd64 are the standard
+      # x64 parents used by the lns23 and plain/musl cross images; the lns8
+      # variants are the old-world toolchain parents. Net8.0/net9.0/net11.0
+      # loongarch64 images can be appended here once their crossdeps exist.
+      - name: Build and push net10.0 loongarch64 cross images
+        shell: pwsh
+        run: |
+          ./eng/docker-tools/Get-ImageBuilder.ps1
+          $builderImage = ${imageNames.imagebuilderName}
+          docker build -t microsoft-dotnet-imagebuilder-withrepo `
+            --build-arg "IMAGE=$builderImage" `
+            -f eng/docker-tools/Dockerfile.WithRepo .
+          docker run --name imagebuilder --rm `
+            -v /var/run/docker.sock:/var/run/docker.sock `
+            -v "$HOME/.docker:/root/.docker" `
+            microsoft-dotnet-imagebuilder-withrepo build `
+            --manifest manifest.json `
+            --path 'src/azurelinux/3.0/net10.0/crossdeps-builder/amd64' `
+            --path 'src/azurelinux/3.0/net10.0/crossdeps-llvm/amd64' `
+            --path 'src/azurelinux/3.0/net10.0/crossdeps-builder/lns8/amd64' `
+            --path 'src/azurelinux/3.0/net10.0/crossdeps-llvm/lns8/amd64' `
+            --path 'src/azurelinux/3.0/net10.0/cross/loongarch64' `
+            --path 'src/azurelinux/3.0/net10.0/cross/loongarch64-musl' `
+            --path 'src/azurelinux/3.0/net10.0/cross/loongarch64-lns23' `
+            --path 'src/azurelinux/3.0/net10.0/cross/loongarch64-lns8' `
+            --registry-override "$env:TARGET_REPO" `
+            --base-override-regex '^mcr\.microsoft\.com/dotnet-buildtools/prereqs' `
+            --base-override-sub "$env:TARGET_REPO" `
+            --source-repo 'https://github.com/chenguohui/dotnet-buildtools-prereqs-docker' `
+            --push
+
+  # Native loongarch64 images (src/loongnix/8.4, src/loongnix/23.3,
+  # src/alpine/3.11, src/alpine/3.24) require a self-hosted loongarch64
+  # runner; the QEMU emulation path is not viable for the full LLVM build in
+  # crossdeps-builder. Add a `runs-on: [self-hosted, loongarch64]` job here
+  # once such a runner is registered.
