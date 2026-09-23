@@ -140,7 +140,7 @@ jobs:
           docker manifest inspect "ghcr.io/${{ github.repository }}:${image}" > /dev/null
           echo "OK  ImageBuilder pushes to ghcr.io/${{ github.repository }}:<tag>"
 
-  # Heaviest job of the workflow: crossdeps-builder/lns8 compiles the Loongson LLVM 20.1.8
+  # Heaviest job of the workflow: crossdeps-builder/lns8 compiles the Loongson LLVM 22.1.8
   # fork from source (clang/lld/clang-tools-extra, 7 targets) with `make -j$(nproc)`.
   # Expect multiple hours on a 2-4 core hosted runner - hence the 350 minute timeout and the
   # disk cleanup below.

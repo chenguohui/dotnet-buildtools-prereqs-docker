@@ -94,15 +94,17 @@ RUN wget https://netcorenativeassets.blob.core.windows.net/resource-packages/ext
     rm -r debian-keyring
 
 RUN \
-    # Download the Loongson LLVM 20.1.8 fork sources.
+    # Download the Loongson LLVM 22.1.8 fork sources (release 2026-09-18; the
+    # fork's LoongArch support covers clang/llvm/lld/compiler-rt/libc++/
+    # libc++abi/openmp, see docs.loongnix.cn/llvm/ReleaseNotes/).
     # Unlike the stock LLVM built in crossdeps-builder/amd64, this fork is
     # required for the old-world ABI (lns8 / Loongnix Server 8.4) LoongArch64
-    # target: upstream LLVM 20.1.8 only produces new-world ABI binaries.
+    # target: upstream LLVM only produces new-world ABI binaries.
     # The fork publishes a sha256 checksum but no GPG signature, so pin the
     # checksum and verify the download against it.
-    LLVM_VERSION=20.1.8 && \
-    wget -O llvm-project.src.tar.gz https://ftp.loongnix.cn/toolchain/llvm/llvm20/llvm-project_${LLVM_VERSION}-1.src.tar.gz && \
-    echo "f5d9c5c9bddafdf675167c1030ad3071e58d618259f717ee0aa06dc822016261 llvm-project.src.tar.gz" | sha256sum -c && \
+    LLVM_VERSION=22.1.8 && \
+    wget -O llvm-project.src.tar.gz https://ftp.loongnix.cn/toolchain/llvm/llvm22/llvm-project_${LLVM_VERSION}-1.src.tar.gz && \
+    echo "9acdcc3531fe7641bc9455a644508b03d3facecbfb4a92ebfde7f01df1e5b278 llvm-project.src.tar.gz" | sha256sum -c && \
     # Build LLVM cross-toolchain (with support for targeting x86/x64, arm64, arm, s390x and ppc64le architectures)
     mkdir llvm-project.src && \
     tar -xzf llvm-project.src.tar.gz --directory llvm-project.src --strip-components=1 && \

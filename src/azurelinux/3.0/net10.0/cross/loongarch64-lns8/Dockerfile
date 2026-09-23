@@ -6,8 +6,8 @@
 #
 # Same design as cross/loongarch64-lns23, but the sysroot is built from the
 # Loongnix Server 8.4 RPM repositories. lns8 is an old-world ABI system, so:
-#   * the host toolchain must be the Loongson LLVM 20.1.8 fork (built in
-#     crossdeps-builder-lns8-amd64; upstream LLVM 20.1.8 is new-world only), and
+#   * the host toolchain must be the Loongson LLVM 22.1.8 fork (built in
+#     crossdeps-builder-lns8-amd64; upstream LLVM is new-world only), and
 #   * target code is built with -mcmodel=large per the Loongson build docs.
 # Binaries produced with this image only require GLIBC symbols <= 2.28 and
 # therefore run on lns8 and other old-world LoongArch distros.

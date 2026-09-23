@@ -7,15 +7,16 @@
 
 1. **sysroot 来源**：本镜像从 **Loongnix Server 8.4 RPM 仓库**构建 sysroot（glibc 2.28），
    因此产物二进制只引用 ≤ 2.28 的 GLIBC 符号，可运行于 lns8 等旧世界 LoongArch 发行版。
-2. **宿主工具链**：lns8 是旧世界 ABI，上游 LLVM 20.1.8 只支持新世界，因此必须使用
-   **Loongson 分支 LLVM 20.1.8**（`llvm-project_20.1.8-1.src.tar.gz`，从源码编译）。
+2. **宿主工具链**：lns8 是旧世界 ABI，上游 LLVM 只支持新世界，因此必须使用
+   **Loongson 分支 LLVM 22.1.8**（`llvm-project_22.1.8-1.src.tar.gz`，从源码编译；
+   2026-09-18 发布，LoongArch 支持覆盖 clang/llvm/lld/compiler-rt/libc++/libc++abi/openmp）。
 
 因此本镜像不再是单镜像，而是复用仓库现有 `crossdeps-builder → crossdeps-llvm → cross`
 三段结构，依赖顺序构建三个镜像：
 
 | 镜像 | 内容 |
 |---|---|
-| `...-crossdeps-builder-lns8-amd64` | fork LLVM 20.1.8 源码编译至 `/opt/llvm`（构建最久） |
+| `...-crossdeps-builder-lns8-amd64` | fork LLVM 22.1.8 源码编译至 `/opt/llvm`（构建最久） |
 | `...-crossdeps-llvm-lns8-amd64` | 承载 fork LLVM 工具链 |
 | `...-cross-loongarch64-lns8` | 最终交叉构建镜像（lns8 sysroot + fork 工具链 + compiler-rt builtins） |
 
@@ -187,7 +188,7 @@ docker run --rm \
 
 | 路径 | 说明 |
 |---|---|
-| `crossdeps-builder/lns8/amd64/Dockerfile` | fork LLVM 20.1.8 源码编译（sha256 固定校验，无 GPG 签名可用） |
+| `crossdeps-builder/lns8/amd64/Dockerfile` | fork LLVM 22.1.8 源码编译（sha256 固定校验，无 GPG 签名可用） |
 | `crossdeps-llvm/lns8/amd64/Dockerfile` | 把 `/opt/llvm` 承载为 `/usr/local` |
 | `cross/loongarch64-lns8/Dockerfile` | 三阶段：sysroot 构建 → LLVM runtimes 交叉编译 → 最终镜像 |
 | `cross/loongarch64-lns8/install-rpms.py` | 解析 yum repomd、下载 loongarch64 RPM 并解包（纯 Python + bsdtar） |
@@ -200,7 +201,7 @@ docker run --rm \
 
 - **旧世界 ABI**：lns8 产物只能在旧世界系统（lns8/lnd20 等）运行；新世界系统请用
   `cross-loongarch64-lns23` 镜像。这也是必须使用 Loongson 分支 LLVM 的原因——上游
-  20.1.8 只生成新世界二进制。
+  LLVM（任何版本）只生成新世界二进制。
 - **`-mcmodel=large`**：旧世界目标代码使用 large code model（Loongson 官方构建文档
   要求，compiler-rt 等已在镜像内按此构建）。若手动用本镜像的 clang 编译目标代码，
   同样需要 `-mcmodel=large`。
@@ -212,9 +213,18 @@ docker run --rm \
   `loongson-gnu-toolchain-8.3-x86_64-loongarch64-linux-gnu-rc1.6.tar.xz` 提取补入 sysroot。
 - **仓库限流**：pkg.loongnix.cn 对大量下载会限流（连接失败/500），`install-rpms.py`
   内置重试与退避；若持续失败，改用来源 2（qemu 导出 sysroot）。
-- **fork 编译**：builder 镜像编译 fork LLVM 约需 30-90 分钟。fork 未提供 GPG 签名，
-  仅以 sha256 固定校验；若 fork 在 Azure Linux 3.0 宿主下编译失败，可参照 Loongson
-  官方文档补 `-G Ninja`、`-DLLVM_BUILD_LLVM_DYLIB=ON`、`-DLLVM_ENABLE_RTTI=ON`。
-- **已知上游问题**：fork 与上游同为 20.1.8 基线，clang 的 LoongArch 后端在编译
-  lttng-ust `tracef.h` 便捷宏时可能崩溃（`SelectBaseAddr`），详见 lns23 README；.NET
-  运行时使用的 `tracepoint.h` API 不受影响。
+- **fork 编译**：builder 镜像编译 fork LLVM 耗时与核数强相关——32 核实测 20.1.8 约
+  12.5 分钟（22.1.8 源码包大 ~14%，略久）；4 核 CI runner 上按核数外推约 1.5-2.5 小时，
+  故 workflow 给了 350 分钟超时并预先清理磁盘。fork 未提供 GPG 签名，仅以 sha256 固定
+  校验；若 fork 在 Azure Linux 3.0 宿主下编译失败，可参照 Loongson 官方文档补
+  `-G Ninja`、`-DLLVM_BUILD_LLVM_DYLIB=ON`、`-DLLVM_ENABLE_RTTI=ON`。
+- **基线差异**：本线 fork 基线为 22.1.8，而 `crossdeps-builder/amd64` 与
+  `crossdeps-amd64`（MCR 上游镜像）内的 LLVM 仍是 20.1.8；两者只在 lns8 链里以
+  `/usr/local` 覆盖的方式叠加，互不影响。
+- **已知上游问题（已实测）**：LTTng 的 STAP 风格内联汇编会触发 LoongArch 后端崩溃
+  （`LoongArchDAGToDAGISel::SelectBaseAddr`，rc=139）。最小复现（`TRACEPOINT_EVENT` +
+  `tracepoint()`，以及 `tracef()` 便捷宏）实测结果：fork 20.1.8、fork 22.1.8 与**上游**
+  20.1.8 均崩溃，且与 `-mcmodel=large`、`-O0/-O2` 都无关 → 属上游 bug，不是 22.1.8
+  升级引入的回归。lns23 线此前用上游 clang 编译 coreclr `eventtrace.cpp` 实测通过，
+  说明真实文件的用法未必触发；lns8 侧是否受影响需以实际 .NET 构建为准（本线端到端
+  构建尚未验证，见上文第三节末尾）。
