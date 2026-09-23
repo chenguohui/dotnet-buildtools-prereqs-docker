@@ -16,10 +16,19 @@ runs:
   steps:
     # Get-ImageBuilder.ps1 pulls the ImageBuilder container image and loads its reference
     # into ${imageNames.imagebuilderName} for the rest of this step's session.
+    #
+    # Stage-EngCommon.ps1 copies eng/common next to every Dockerfile that declares
+    # `COPY eng/common/...`, because ImageBuilder's build context is the Dockerfile's own
+    # directory rather than the repo root. This is what the Azure DevOps pipelines pass as
+    # customPreImageBuilderBuildSteps and what build.ps1 does before invoking ImageBuilder;
+    # without it every such Dockerfile fails with
+    #   failed to compute cache key: "/eng/common/cross": not found
+    # Staging has to happen before the repo is baked into the with-repo image below.
     - name: Build the ImageBuilder-with-repo image
       shell: pwsh
       run: |
         ./eng/docker-tools/Get-ImageBuilder.ps1
+        ./eng/Stage-EngCommon.ps1
         docker build -t microsoft-dotnet-imagebuilder-withrepo `
           --build-arg "IMAGE=${imageNames.imagebuilderName}" `
           -f eng/docker-tools/Dockerfile.WithRepo .
@@ -64,3 +73,11 @@ runs:
           --base-override-sub "${TARGET_REPO}" \
           --source-repo "${{ github.server_url }}/${{ github.repository }}" \
           --push
+
+    # Mirror of the staging above, like build.ps1's finally block: keeps the working tree
+    # clean for whatever runs after this action (and on a self-hosted runner, for the next
+    # job that reuses the same workspace).
+    - name: Unstage eng/common
+      if: ${{ always() }}
+      shell: pwsh
+      run: ./eng/Stage-EngCommon.ps1 -Clean
