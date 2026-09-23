@@ -1,13 +1,34 @@
 name: Publish LoongArch images to GHCR
 
-# Publishes the loongarch64 cross images (and their crossdeps parents) to
-# ghcr.io/chenguohui/dotnet-buildtools-prereqs-docker, using the upstream tag
-# strings unchanged. Mirrors the Azure DevOps pipeline's ImageBuilder flow.
+# Builds the LoongArch64 .NET 10 cross images (plus the crossdeps parents that only we can
+# provide) on a GitHub runner and pushes them to ghcr.io/<owner>/<repo>.
 #
-# Note: GitHub Actions only runs workflows found in the branch being pushed,
-# so this file must also be present on the content branches
-# (feature/net10-cross-loongarch64-lns8 / -lns23) for their push events to
-# trigger a publish. workflow_dispatch on this branch always works.
+# Naming: ImageBuilder pushes to <registry-override>/<manifest repos[].name>:<tag>. The
+# azurelinux manifest carries this repo's own name, so images land on ghcr.io/<owner>/<repo>
+# while the tag strings stay identical to the upstream/MCR ones
+# (azurelinux-3.0-net10.0-cross-loongarch64-lns8 etc.). Renaming the GitHub repo therefore
+# requires updating src/azurelinux/manifest.json too; `preflight` fails fast if they drift.
+#
+# Dependency graph (every cross image FROMs the crossdeps parents, whose tags only exist in
+# this GHCR repo, hence --base-override-sub in the composite action):
+#   cross/loongarch64        -> crossdeps-builder-amd64
+#   cross/loongarch64-musl   -> crossdeps-builder-amd64, crossdeps-llvm-amd64
+#   cross/loongarch64-lns23  -> crossdeps-builder-amd64, crossdeps-llvm-amd64
+#   cross/loongarch64-lns8   -> crossdeps-builder-lns8-amd64, crossdeps-llvm-lns8-amd64
+# Of the three upstream amd64 crossdeps images, crossdeps-builder-amd64 and crossdeps-llvm-
+# amd64 are *promoted* from MCR (pull/tag/push, no rebuild - rebuilding them would compile
+# the same LLVM from source for nothing), while crossdeps-amd64 is built here because that
+# same job doubles as the smoke test for ImageBuilder's naming (see below). The two lns8
+# ones are built here because they carry the Loongson LLVM fork (old-world ABI) that nothing
+# upstream provides.
+#
+# Runner selection: set the repository variable BUILD_RUNNER (Settings -> Variables ->
+# Actions) to switch every job to another runner, e.g. "self-hosted" for a machine that
+# already has the Docker layer cache - the lns8 job below compiles LLVM from source and is
+# by far the longest step on a hosted runner.
+#
+# Note: GitHub only runs workflows that exist in the pushed ref, and the "Run workflow"
+# button additionally requires this file on the default branch.
 
 on:
   push:
@@ -19,73 +40,240 @@ on:
       - 'src/**'
       - 'eng/**'
       - 'manifest.json'
+      - '.github/actions/**'
       - '.github/workflows/ghcr-publish.yml'
   workflow_dispatch:
+    inputs:
+      skip_dependency_images:
+        description: 'Skip the crossdeps parents (promote + lns8 build) and only (re)build the cross images'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
   packages: write
 
-env:
-  # Registry + repo for both the tags we push and the FROM override.
-  TARGET_REPO: ghcr.io/chenguohui/dotnet-buildtools-prereqs-docker
-
 jobs:
-  publish-cross-images:
-    runs-on: ubuntu-latest
-    timeout-minutes: 360
+  # Cheap guard: the pushed image names are the concatenation of the manifest repo name and
+  # this GitHub repo's name, so a mismatch would silently push somewhere unintended.
+  preflight:
+    runs-on: ${{ vars.BUILD_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
+      - name: Check that the manifest repo name matches this GitHub repo
+        run: |
+          set -euo pipefail
+          name=$(sed -n 's/.*"name": "\(.*\)",/\1/p' src/azurelinux/manifest.json | head -1)
+          echo "manifest repo name: $name"
+          echo "github repository:  ${{ github.repository }}"
+          if [ "$name" != "${{ github.repository }}" ]; then
+            echo "::error::src/azurelinux/manifest.json declares '$name' but this repo is '${{ github.repository }}'. ImageBuilder pushes to ghcr.io/<manifest name>, so the two must match."
+            exit 1
+          fi
+          echo "image names pushed by this workflow:"
+          for tag in \
+            azurelinux-3.0-net10.0-crossdeps-builder-lns8-amd64 \
+            azurelinux-3.0-net10.0-crossdeps-llvm-lns8-amd64 \
+            azurelinux-3.0-net10.0-cross-loongarch64 \
+            azurelinux-3.0-net10.0-cross-loongarch64-musl \
+            azurelinux-3.0-net10.0-cross-loongarch64-lns23 \
+            azurelinux-3.0-net10.0-cross-loongarch64-lns8; do
+            echo "  ghcr.io/${name}:${tag}"
+          done
 
+  # Two of the three amd64 parents exist on MCR, so copy them instead of rebuilding: same
+  # bits, minutes instead of hours. One image at a time keeps the runner's disk peak at ~8 GB.
+  # (crossdeps-amd64, the third one, is built by ImageBuilder in the job below.)
+  promote-remote-parents:
+    needs: preflight
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.skip_dependency_images == false }}
+    runs-on: ${{ vars.BUILD_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 120
+    env:
+      TARGET_REPO: ghcr.io/${{ github.repository }}
+    steps:
       - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      # The stock Invoke-ImageBuilder.ps1 runs the ImageBuilder container with
-      # only the docker socket mounted, so the push credentials written by
-      # login-action never reach it. Run the container manually and mount the
-      # docker config so `docker push` inside the container is authenticated.
-      #
-      # ImageBuilder sorts images by dependency and pushes parents before
-      # building children, which matters because --base-override-sub rewrites
-      # the children's FROM lines to point at this GHCR repo.
-      #
-      # Paths: crossdeps-builder/amd64 + crossdeps-llvm/amd64 are the standard
-      # x64 parents used by the lns23 and plain/musl cross images; the lns8
-      # variants are the old-world toolchain parents. Net8.0/net9.0/net11.0
-      # loongarch64 images can be appended here once their crossdeps exist.
-      - name: Build and push net10.0 loongarch64 cross images
-        shell: pwsh
+      - name: Promote the upstream crossdeps images from MCR
         run: |
-          ./eng/docker-tools/Get-ImageBuilder.ps1
-          $builderImage = ${imageNames.imagebuilderName}
-          docker build -t microsoft-dotnet-imagebuilder-withrepo `
-            --build-arg "IMAGE=$builderImage" `
-            -f eng/docker-tools/Dockerfile.WithRepo .
-          docker run --name imagebuilder --rm `
-            -v /var/run/docker.sock:/var/run/docker.sock `
-            -v "$HOME/.docker:/root/.docker" `
-            microsoft-dotnet-imagebuilder-withrepo build `
-            --manifest manifest.json `
-            --path 'src/azurelinux/3.0/net10.0/crossdeps-builder/amd64' `
-            --path 'src/azurelinux/3.0/net10.0/crossdeps-llvm/amd64' `
-            --path 'src/azurelinux/3.0/net10.0/crossdeps-builder/lns8/amd64' `
-            --path 'src/azurelinux/3.0/net10.0/crossdeps-llvm/lns8/amd64' `
-            --path 'src/azurelinux/3.0/net10.0/cross/loongarch64' `
-            --path 'src/azurelinux/3.0/net10.0/cross/loongarch64-musl' `
-            --path 'src/azurelinux/3.0/net10.0/cross/loongarch64-lns23' `
-            --path 'src/azurelinux/3.0/net10.0/cross/loongarch64-lns8' `
-            --registry-override "$env:TARGET_REPO" `
-            --base-override-regex '^mcr\.microsoft\.com/dotnet-buildtools/prereqs' `
-            --base-override-sub "$env:TARGET_REPO" `
-            --source-repo 'https://github.com/chenguohui/dotnet-buildtools-prereqs-docker' `
-            --push
+          set -euo pipefail
+          for tag in crossdeps-builder-amd64 crossdeps-llvm-amd64; do
+            image="azurelinux-3.0-net10.0-${tag}"
+            source="mcr.microsoft.com/dotnet-buildtools/prereqs:${image}"
+            docker pull "$source"
+            docker tag "$source" "${TARGET_REPO}:${image}"
+            docker push "${TARGET_REPO}:${image}"
+            docker rmi "$source" "${TARGET_REPO}:${image}" || true
+            docker image prune -f
+          done
+          df -h /
 
-  # Native loongarch64 images (src/loongnix/8.4, src/loongnix/23.3,
-  # src/alpine/3.11, src/alpine/3.24) require a self-hosted loongarch64
-  # runner; the QEMU emulation path is not viable for the full LLVM build in
-  # crossdeps-builder. Add a `runs-on: [self-hosted, loongarch64]` job here
-  # once such a runner is registered.
+  # Builds crossdeps-amd64 with ImageBuilder, which doubles as the naming smoke test: the
+  # assertion below fails unless ImageBuilder really pushed to ghcr.io/<owner>/<repo>.
+  # Everything expensive needs this job, so a wrong --registry-override assumption costs
+  # minutes instead of hours. It is also crossdeps-amd64's only producer, and the lns8 LLVM
+  # images are built on top of it.
+  build-crossdeps-amd64:
+    needs: preflight
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.skip_dependency_images == false }}
+    runs-on: ${{ vars.BUILD_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: ./.github/actions/imagebuilder-publish
+        with:
+          paths: src/azurelinux/3.0/net10.0/crossdeps/amd64
+      - name: Assert that ImageBuilder pushed where this workflow expects
+        run: |
+          set -euo pipefail
+          image="azurelinux-3.0-net10.0-crossdeps-amd64"
+          docker manifest inspect "ghcr.io/${{ github.repository }}:${image}" > /dev/null
+          echo "OK  ImageBuilder pushes to ghcr.io/${{ github.repository }}:<tag>"
+
+  # Heaviest job of the workflow: crossdeps-builder/lns8 compiles the Loongson LLVM 20.1.8
+  # fork from source (clang/lld/clang-tools-extra, 7 targets) with `make -j$(nproc)`.
+  # Expect multiple hours on a 2-4 core hosted runner - hence the 350 minute timeout and the
+  # disk cleanup below.
+  build-lns8-crossdeps-builder:
+    needs: [preflight, build-crossdeps-amd64]
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.skip_dependency_images == false }}
+    runs-on: ${{ vars.BUILD_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /usr/local/share/boost "${AGENT_TOOLSDIRECTORY:-/opt/hostedtoolcache}/CodeQL" || true
+          docker image prune -af || true
+          df -h /
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: ./.github/actions/imagebuilder-publish
+        with:
+          paths: src/azurelinux/3.0/net10.0/crossdeps-builder/lns8/amd64
+
+  # Consumes crossdeps-builder-lns8-amd64 (which carries the built LLVM) and the promoted
+  # crossdeps-amd64; both are pulled back from GHCR, hence the auth mount in the action.
+  build-lns8-crossdeps-llvm:
+    needs: [promote-remote-parents, build-lns8-crossdeps-builder]
+    # Skipped together with the other crossdeps jobs when skip_dependency_images is set;
+    # build-cross-image-lns8 then consumes the parents that are already in GHCR.
+    if: ${{ (github.event_name != 'workflow_dispatch' || inputs.skip_dependency_images == false) && !cancelled() && !failure() }}
+    runs-on: ${{ vars.BUILD_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc || true
+          docker image prune -af || true
+          df -h /
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: ./.github/actions/imagebuilder-publish
+        with:
+          paths: src/azurelinux/3.0/net10.0/crossdeps-llvm/lns8/amd64
+
+  # One runner per image: each cross image is 6-7 GB on its own, so building them in a
+  # single job would exhaust the runner's disk. They only wait for the promoted parents.
+  build-cross-images:
+    needs: promote-remote-parents
+    if: ${{ !cancelled() && !failure() }}
+    runs-on: ${{ vars.BUILD_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        path:
+          - src/azurelinux/3.0/net10.0/cross/loongarch64
+          - src/azurelinux/3.0/net10.0/cross/loongarch64-musl
+          - src/azurelinux/3.0/net10.0/cross/loongarch64-lns23
+    steps:
+      - uses: actions/checkout@v4
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc || true
+          docker image prune -af || true
+          df -h /
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: ./.github/actions/imagebuilder-publish
+        with:
+          paths: ${{ matrix.path }}
+
+  # Split from the matrix above because only this one needs the lns8 crossdeps parents, and
+  # waiting for them would stall the other three images for hours.
+  build-cross-image-lns8:
+    needs: build-lns8-crossdeps-llvm
+    if: ${{ !cancelled() && !failure() }}
+    runs-on: ${{ vars.BUILD_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc || true
+          docker image prune -af || true
+          df -h /
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: ./.github/actions/imagebuilder-publish
+        with:
+          paths: src/azurelinux/3.0/net10.0/cross/loongarch64-lns8
+
+  verify:
+    needs: [build-cross-images, build-cross-image-lns8]
+    if: ${{ !cancelled() && !failure() }}
+    runs-on: ${{ vars.BUILD_RUNNER || 'ubuntu-latest' }}
+    steps:
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Check that every published tag resolves
+        run: |
+          set -euo pipefail
+          for tag in \
+            azurelinux-3.0-net10.0-crossdeps-builder-lns8-amd64 \
+            azurelinux-3.0-net10.0-crossdeps-llvm-lns8-amd64 \
+            azurelinux-3.0-net10.0-cross-loongarch64 \
+            azurelinux-3.0-net10.0-cross-loongarch64-musl \
+            azurelinux-3.0-net10.0-cross-loongarch64-lns23 \
+            azurelinux-3.0-net10.0-cross-loongarch64-lns8; do
+            docker manifest inspect "ghcr.io/${{ github.repository }}:${tag}" > /dev/null
+            echo "OK  ghcr.io/${{ github.repository }}:${tag}"
+          done
+
+  # Native loongarch64 images (src/loongnix/8.4, src/loongnix/23.3, src/alpine/3.11,
+  # src/alpine/3.24) need a self-hosted loongarch64 runner; QEMU emulation is not viable for
+  # the full LLVM build in crossdeps-builder. Add a `runs-on: [self-hosted, loongarch64]` job
+  # here once such a runner is registered.

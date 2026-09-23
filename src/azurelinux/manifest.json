@@ -4,7 +4,7 @@
   },
   "repos": [
     {
-      "name": "dotnet-buildtools/prereqs",
+      "name": "chenguohui/dotnet-buildtools-prereqs-docker",
       "images": [
         {
           "platforms": [
